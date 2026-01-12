@@ -76,31 +76,42 @@ export default function Home() {
   const handleGenerate = async () => {
     setLoading(true);
     try {
+      console.log('1. Starting generation...');
       const response = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ briefing, brandRules }),
       });
 
+      console.log('2. Got response:', response.status);
       const data = await response.json();
+      console.log('3. Parsed data:', data);
       
       if (response.ok) {
+        console.log('4. Setting generated content...');
         setGeneratedContent(data);
         
+        console.log('5. Starting consistency check...');
         const checkResponse = await fetch('/api/consistency-check', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ content: data, brandRules }),
         });
 
+        console.log('6. Got consistency response:', checkResponse.status);
         const checkData = await checkResponse.json();
+        console.log('7. Consistency data:', checkData);
+        
         setConsistencyResult(checkData);
+        console.log('8. Setting step to 4...');
         setStep(4);
+        console.log('9. Done!');
       } else {
         alert(data.error || 'Generatie mislukt');
       }
     } catch (error) {
-      alert('Er ging iets fout');
+      console.error('CATCH ERROR:', error);
+      alert('Er ging iets fout: ' + error);
     }
     setLoading(false);
   };
@@ -355,12 +366,20 @@ export default function Home() {
             <div className="bg-white rounded-xl shadow-lg p-6">
               <h2 className="text-2xl font-bold mb-4">Generated Content</h2>
               <div className="bg-gray-50 p-6 rounded-lg mb-4">
-                <p className="whitespace-pre-wrap">{generatedContent.contentCopy}</p>
+                <p className="whitespace-pre-wrap">
+                  {typeof generatedContent.contentCopy === 'string' 
+                    ? generatedContent.contentCopy 
+                    : JSON.stringify(generatedContent.contentCopy, null, 2)}
+                </p>
               </div>
               
               <h3 className="font-bold mb-2">Visual Concept Description</h3>
               <div className="bg-blue-50 p-4 rounded-lg">
-                <p className="text-sm">{generatedContent.imagePrompt}</p>
+                <p className="text-sm">
+                  {typeof generatedContent.imagePrompt === 'string'
+                    ? generatedContent.imagePrompt
+                    : JSON.stringify(generatedContent.imagePrompt, null, 2)}
+                </p>
               </div>
             </div>
 
@@ -382,10 +401,10 @@ export default function Home() {
             <div className="bg-white rounded-xl shadow-lg p-6">
               <h2 className="text-2xl font-bold mb-4 text-green-600">Applied Rules ✓</h2>
               <div className="space-y-2">
-                {consistencyResult.appliedRules.map((rule, i) => (
+                {Array.isArray(consistencyResult.appliedRules) && consistencyResult.appliedRules.map((rule, i) => (
                   <div key={i} className="flex items-start bg-green-50 p-3 rounded-lg">
                     <span className="text-green-600 mr-3">✓</span>
-                    <span>{rule}</span>
+                    <span>{typeof rule === 'string' ? rule : JSON.stringify(rule)}</span>
                   </div>
                 ))}
               </div>
