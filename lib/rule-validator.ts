@@ -15,7 +15,8 @@ export function validateBriefing(briefing: Briefing, brandRules: string): PreChe
   ];
 
   requiredFields.forEach(field => {
-    if (!briefing[field.key] || (typeof briefing[field.key] === 'string' && briefing[field.key].trim() === '')) {
+    const value = briefing[field.key];
+    if (!value || (typeof value === 'string' && value.trim() === '')) {
       missing.push({
         field: field.label,
         reason: 'This field is required',
