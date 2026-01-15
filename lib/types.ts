@@ -4,8 +4,8 @@ export interface Briefing {
   projectName: string;
   targetAudience: string;
   goal: string;
-channel: 'led-wall-retail' | 'digital-signage' | 'online-campaign';  
-additionalNotes?: string;
+  channel: 'led-wall-retail' | 'digital-signage';
+  additionalNotes?: string;
 }
 
 export interface BrandRules {
@@ -14,6 +14,20 @@ export interface BrandRules {
   style?: string[];
   constraints?: string[];
   rawText?: string;
+}
+
+export interface CanvasSpec {
+  width: number;
+  height: number;
+}
+
+export interface LayoutSpec {
+  format: Briefing['channel'];
+  canvas: CanvasSpec;
+  safe_area: string;
+  layout: string[];
+  typography: string;
+  notes?: string;
 }
 
 export interface GeneratedContent {
@@ -28,6 +42,7 @@ export interface GeneratedContent {
   contentCopy: string;
   appliedRules: string[];
   warnings: string[];
+  layoutSpec?: LayoutSpec;
 }
 
 export interface Violation {

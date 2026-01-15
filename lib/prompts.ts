@@ -1,41 +1,112 @@
 // lib/prompts.ts
-import { Briefing } from './types';
+import { Briefing, CanvasSpec, LayoutSpec } from './types';
 
-export const generateContentPrompt = (briefing: Briefing, brandRules: string): string => {
-  return `You are a professional brand-consistent content generator.
+export const generateContentPrompt = (
+  briefing: Briefing,
+  brandRules: string,
+  canvas?: CanvasSpec,
+  layoutSpec?: LayoutSpec
+): string => {
+  const canvasText = canvas ? `${canvas.width}x${canvas.height}px` : 'Not specified';
+  const providedLayout = layoutSpec ? JSON.stringify(layoutSpec, null, 2) : 'Not provided';
 
-BRAND RULES (MUST FOLLOW STRICTLY):
+  const channelGuidance =
+    briefing.channel === 'digital-signage'
+      ? `Kanaal: Digital signage
+- Context: informatiescherm (vaak portrait)
+- Tekst: extra kort en scanbaar (max 2 korte zinnen)
+- Beeld: rustige achtergrond, veel witruimte/negative space voor overlay-tekst`
+      : `Kanaal: LED wall
+- Context: groot formaat scherm in experience/retail omgeving
+- Tekst: kort en premium (2–3 korte zinnen max)
+- Beeld: clean, high-impact achtergrond met duidelijke negatieve ruimte voor overlay-tekst`;
+
+  return `Je bent een AI Content Consistency Assistant voor de Creative Studio van First Impression.
+Je ondersteunt de conceptfase door briefing + geselecteerde brand rules te vertalen naar richtinggevende output.
+Je vervangt de creative niet: je levert een gestructureerd startpunt dat controleerbaar en reproduceerbaar is (human-in-the-loop).
+
+BRAND RULES (MOET JE STRIKT VOLGEN):
 ${brandRules}
 
-BRIEFING:
-Project: ${briefing.projectName || 'Not specified'}
-Target Audience: ${briefing.targetAudience || 'Not specified'}
-Goal: ${briefing.goal || 'Not specified'}
-Channel: ${briefing.channel || 'Not specified'}
-Additional Notes: ${briefing.additionalNotes || 'None'}
+Belangrijk:
+- Brand rules zijn de bron van waarheid voor tone of voice, stijl, constraints en do/don'ts.
+- Als de brand rules "Preferred wording examples" en/of "Avoid wording" bevatten, volg die dan strikt in de contentCopy.
+- Als die voorbeelden ontbreken, houd de contentCopy alsnog consistent met de aanwezige tone/stijl regels.
 
-TASK:
-Generate content that strictly follows ALL brand rules. Return ONLY a JSON object with this structure:
+BRIEFING:
+Project: ${briefing.projectName || 'Niet gespecificeerd'}
+Doelgroep: ${briefing.targetAudience || 'Niet gespecificeerd'}
+Doel / boodschap: ${briefing.goal || 'Niet gespecificeerd'}
+Kanaal: ${briefing.channel || 'Niet gespecificeerd'}
+Extra notities: ${briefing.additionalNotes || 'Geen'}
+
+CANVAS (target deliverable):
+${canvasText}
+
+${channelGuidance}
+
+OPTIONAL PROVIDED LAYOUT SPEC (template/assumpties vanuit UI):
+${providedLayout}
+
+TAKEN:
+Genereer output die strikt voldoet aan alle brand rules. Return ALLEEN een JSON object met exact deze structuur en keys:
 
 {
   "briefingSpec": {
-    "summary": "Brief summary of the project",
-    "targetAudience": "Refined audience description",
-    "keyMessages": ["message 1", "message 2", "message 3"],
-    "channel": "specific channel details",
+    "summary": "Korte samenvatting van wat de output moet communiceren",
+    "targetAudience": "Aangescherpte doelgroepomschrijving",
+    "keyMessages": ["boodschap 1", "boodschap 2", "boodschap 3"],
+    "channel": "korte interpretatie van het kanaal voor deze deliverable",
     "constraints": ["constraint 1", "constraint 2"]
   },
-  "imagePrompt": "Detailed visual description for image generation (50-100 words, specific style/mood/elements)",
-  "contentCopy": "The actual content text (following all brand rules)",
-  "appliedRules": ["rule 1 that was applied", "rule 2 that was applied"],
-  "warnings": ["any potential issues or suggestions"]
+  "contentCopy": "Nederlandstalige concepttekst die voldoet aan brand rules en kanaal-lengte.",
+  "imagePrompt": "ENGLISH background-only image prompt that fits the canvas. IMPORTANT: no text, no letters, no logos, no typography in the image. Leave clean negative space for UI text overlay.",
+  "layoutSpec": {
+    "format": "${briefing.channel}",
+    "canvas": { "width": ${canvas?.width ?? 1600}, "height": ${canvas?.height ?? 1200} },
+    "safe_area": "10%",
+    "layout": ["headline_top_left", "visual_center", "cta_bottom_left"],
+    "typography": "bold headline + short subline",
+    "notes": "Background-only image. Text will be applied as UI overlay."
+  },
+  "appliedRules": ["regel die is toegepast", "regel die is toegepast"],
+  "warnings": ["mogelijke issue / ontbrekende info / suggestie voor betere input"]
 }
 
-CRITICAL: Return ONLY valid JSON. No markdown, no backticks, no explanation.`;
+REGELS VOOR contentCopy (NEDERLANDS):
+- Schrijf in het Nederlands.
+- Houd het conceptfase-waardig: richtinggevend, helder, minimal.
+- Tone of voice moet matchen met brand rules (en met Preferred wording examples als die bestaan).
+- Vermijd Avoid wording (en close varianten) als dit in de brand rules staat.
+- Kanaal-lengte:
+  - Digital signage: maximaal 2 korte zinnen.
+  - LED wall: maximaal 2–3 korte zinnen, nog steeds minimal/premium.
+- Vermijd overdreven claims of “salesy” taal tenzij brand rules dat expliciet toestaan.
+
+REGELS VOOR imagePrompt (ENGLISH):
+- Must fit the canvas: ${canvasText}.
+- Background-only. No text, no typography, no logos, no letters.
+- Leave clear negative space in safe areas for UI overlay text.
+- Be specific about style, mood, composition, lighting, materials, and key elements.
+- Keep it reproducible: avoid vague words like "beautiful"; describe what to generate.
+
+REGELS VOOR layoutSpec:
+- Laat de keys exact zo staan (format/canvas/safe_area/layout/typography/notes).
+- Layout moet passen bij het kanaal:
+  - LED wall: ["headline_top_left","visual_center","cta_bottom_left"]
+  - Digital signage: ["headline_top","visual_center","cta_bottom"]
+- Als er een layoutSpec is meegegeven in de input, neem die over en verbeter alleen als het echt conflicteert met kanaal/canvas.
+
+CRITICAL:
+- Return ONLY valid JSON (geen markdown, geen backticks, geen uitleg).
+- Houd JSON-keys exact gelijk aan het schema hierboven.
+- imagePrompt mag nooit tekst-in-beeld vragen.
+- Zorg dat de JSON parsebaar is.`;
 };
 
 export const consistencyCheckPrompt = (content: any, brandRules: string): string => {
-  return `You are a brand consistency auditor.
+  return `Je bent een brand consistency auditor voor de Creative Studio (First Impression).
+Je controleert of de gegenereerde concept-output voldoet aan de brand rules. De gebruiker blijft eindverantwoordelijk (human-in-the-loop).
 
 BRAND RULES:
 ${brandRules}
@@ -43,22 +114,28 @@ ${brandRules}
 GENERATED CONTENT TO AUDIT:
 ${JSON.stringify(content, null, 2)}
 
-TASK:
-Audit this content against the brand rules. Return ONLY a JSON object:
+TAKEN:
+Audit deze output tegen de brand rules. Return ALLEEN een JSON object:
 
 {
   "score": 85,
   "violations": [
     {
-      "rule": "specific rule that was violated",
+      "rule": "welke specifieke regel is overtreden",
       "severity": "high",
-      "description": "what exactly is wrong",
-      "location": "where in content (briefingSpec/imagePrompt/contentCopy)"
+      "description": "wat is er precies mis en waarom",
+      "location": "waar in content (briefingSpec/imagePrompt/contentCopy)"
     }
   ],
-  "appliedRules": ["rule 1 that was correctly followed", "rule 2..."],
-  "suggestions": ["suggestion 1 for improvement", "suggestion 2..."]
+  "appliedRules": ["regel die aantoonbaar goed gevolgd is", "regel die goed gevolgd is"],
+  "suggestions": ["concrete verbeteractie 1", "concrete verbeteractie 2"]
 }
+
+Extra beoordelingsregels:
+- Als brand rules "Preferred wording examples" bevatten: contentCopy moet daar duidelijk op lijken.
+- Als brand rules "Avoid wording" bevatten: gebruik ervan (of close variant) is een overtreding.
+- Als imagePrompt tekst/logos/typography in het beeld vraagt: severity high.
+- Als contentCopy te lang is voor het kanaal (signage/LED): severity medium.
 
 Score calculation:
 - 100 = Perfect adherence
@@ -71,20 +148,21 @@ CRITICAL: Return ONLY valid JSON.`;
 };
 
 export const analyzeExamplesPrompt = (examples: string[]): string => {
-  return `You are a brand voice analyzer.
+  return `Je bent een brand voice analyzer.
+Je analyseert alleen de meegegeven voorbeelden (geen externe aannames).
 
 EXAMPLE CONTENT:
 ${examples.join('\n\n---\n\n')}
 
-TASK:
-Analyze these examples and extract the brand rules. Return ONLY a JSON object:
+TAKEN:
+Analyseer de voorbeelden en extraheer brand rules. Return ALLEEN een JSON object:
 
 {
-  "tone": "description of tone (e.g., professional but friendly)",
-  "style": "writing style patterns (e.g., short sentences, active voice)",
-  "constraints": "observed constraints (e.g., word count, formatting)",
-  "vocabulary": ["common words/phrases used"],
-  "avoid": ["patterns to avoid based on what's NOT in examples"]
+  "tone": "beschrijving van tone of voice",
+  "style": "schrijfpatronen en structuur",
+  "constraints": "observed constraints (zoals lengte, formatting, verboden/vereiste elementen)",
+  "vocabulary": ["woorden/frasen die vaak terugkomen"],
+  "avoid": ["patronen/woorden om te vermijden"]
 }
 
 CRITICAL: Return ONLY valid JSON.`;

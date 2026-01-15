@@ -42,7 +42,7 @@ export function validateBriefing(briefing: Briefing, brandRules: string): PreChe
     }
 
     // Check 2: Channel appropriateness
-    if (rulesLower.includes('no social media') && briefing.channel === 'social') {
+    if (rulesLower.includes('no social media') && briefing.channel === 'social' as Briefing['channel']) {
       conflicts.push({
         area: 'Channel',
         issue: 'Social media not allowed according to brand rules',

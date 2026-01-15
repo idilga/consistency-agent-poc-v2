@@ -1,176 +1,126 @@
-// lib/consistency-scorer.ts
-import { GeneratedContent, Violation } from './types';
+import { GeneratedContent } from '@/lib/types';
 
-export function calculateConsistencyScore(
-  content: GeneratedContent,
-  brandRules: string
-): {
+type Violation = { rule: string; description: string; location: string };
+type Result = {
   score: number;
-  violations: Violation[];
   appliedRules: string[];
+  violations: Violation[];
   suggestions: string[];
-} {
-  let score = 100;
-  const violations: Violation[] = [];
+};
+
+function splitRules(brandRules: string): string[] {
+  // pakt bullets en korte regels
+  return brandRules
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => l.replace(/^[-•]\s*/, ''))
+    .filter((l) => l.length >= 6)
+    .slice(0, 40); // cap: niet eindeloos
+}
+
+function includesAny(text: string, terms: string[]) {
+  const t = text.toLowerCase();
+  return terms.some((x) => t.includes(x.toLowerCase()));
+}
+
+export function calculateConsistencyScore(content: GeneratedContent, brandRules: string): Result {
+  const rules = splitRules(brandRules);
+
+  const outputText = `${content.contentCopy}\n\n${content.imagePrompt}`.toLowerCase();
+
   const appliedRules: string[] = [];
+  const violations: Violation[] = [];
+  const suggestions: string[] = [];
 
-  const rulesText = brandRules.toLowerCase();
-  const contentText = JSON.stringify(content).toLowerCase();
+  // Heuristiek: detecteer categorieën + termen
+  const mustColorTerms = ['kleur', 'colors', 'colour', 'hex', '#', 'primary', 'secondary'];
+  const mustToneTerms = ['tone', 'toon', 'voice', 'vriendelijk', 'direct', 'motiverend', 'energiek'];
+  const mustImageTerms = ['beeld', 'foto', 'photography', 'imagery', 'contrast', 'witruimte', 'layout'];
 
-  // Check 1: Word count constraints
-  const wordCountMatch = rulesText.match(/max(?:imum)?\s+(\d+)\s+word/i);
-  if (wordCountMatch) {
-    const maxWords = parseInt(wordCountMatch[1]);
-    const wordCount = content.contentCopy?.split(/\s+/).length || 0;
-    
-    if (wordCount > maxWords) {
-      score -= 15;
-      violations.push({
-        rule: `Maximum ${maxWords} words`,
-        severity: 'high',
-        description: `Content has ${wordCount} words, exceeds limit by ${wordCount - maxWords}`,
-        location: 'contentCopy'
-      });
-    } else {
-      appliedRules.push(`Word count within limit (${wordCount}/${maxWords})`);
-    }
+  // 1) Als brandrules helemaal leeg/te klein zijn → score niet 100
+  if (rules.length < 3) {
+    return {
+      score: 55,
+      appliedRules: [],
+      violations: [
+        {
+          rule: 'Te weinig brand rules',
+          description: 'Er zijn te weinig regels om een echte consistency-check te doen.',
+          location: 'brandRules input',
+        },
+      ],
+      suggestions: ['Voeg minimaal 8–12 toetsbare regels toe (kleur, tone of voice, beeld, layout).'],
+    };
   }
 
-  // Check 2: Voice preference (we vs I)
-  if (rulesText.includes('we') && rulesText.includes('not') && rulesText.includes('i')) {
-    const hasI = /\bi\b/i.test(contentText);
-    if (hasI) {
-      score -= 10;
-      violations.push({
-        rule: "Use 'we' instead of 'I'",
-        severity: 'medium',
-        description: "Content contains first-person singular 'I'",
-        location: 'contentCopy'
-      });
-    } else {
-      appliedRules.push("Correctly uses 'we' instead of 'I'");
-    }
+  // 2) Applied rules: regels die “matchen” op output (simpel: keywords uit regel)
+  for (const r of rules) {
+    const keywords = r
+      .toLowerCase()
+      .replace(/[^\w\s#-]/g, '')
+      .split(/\s+/)
+      .filter((w) => w.length >= 5)
+      .slice(0, 6);
+
+    if (keywords.length === 0) continue;
+
+    const hit = keywords.some((k) => outputText.includes(k));
+    if (hit) appliedRules.push(r);
   }
 
-  // Check 3: Tone requirements
-  if (rulesText.includes('positive')) {
-    const negativeWords = ['bad', 'worst', 'terrible', 'awful', 'hate', 'never'];
-    const hasNegative = negativeWords.some(word => contentText.includes(word));
-    
-    if (hasNegative) {
-      score -= 8;
-      violations.push({
-        rule: 'Positive tone required',
-        severity: 'medium',
-        description: 'Content contains negative language',
-        location: 'contentCopy'
-      });
-    } else {
-      appliedRules.push('Maintains positive tone');
-    }
+  // 3) Violations: basis checks die altijd betekenis geven
+  // KLEUR: als regels over kleur praten maar prompt noemt geen kleur
+  const rulesMentionColor = includesAny(brandRules, mustColorTerms);
+  const outputMentionsColor = includesAny(outputText, ['#', 'hex', 'kleur', 'oranje', 'zwart', 'wit', 'blauw', 'geel', 'rood']);
+
+  if (rulesMentionColor && !outputMentionsColor) {
+    violations.push({
+      rule: 'Kleurtoepassing ontbreekt',
+      description: 'Brand rules bevatten kleurregels, maar de output noemt geen kleurgebruik.',
+      location: 'imagePrompt / contentCopy',
+    });
+    suggestions.push('Voeg kleuren toe aan de image prompt (bijv. “oranje/zwart/wit” of hex-codes).');
   }
 
-  // Check 4: Forbidden words/jargon
-  if (rulesText.includes('avoid jargon') || rulesText.includes('no jargon')) {
-    const jargonWords = ['leverage', 'synergy', 'paradigm', 'ecosystem', 'disrupt'];
-    const hasJargon = jargonWords.some(word => contentText.includes(word));
-    
-    if (hasJargon) {
-      score -= 12;
-      violations.push({
-        rule: 'Avoid jargon',
-        severity: 'high',
-        description: 'Content contains business jargon',
-        location: 'contentCopy'
-      });
-    } else {
-      appliedRules.push('Jargon-free language');
-    }
+  // TONE: als rules tone noemen maar copy is te neutraal
+  const rulesMentionTone = includesAny(brandRules, mustToneTerms);
+  const outputMentionsTone = includesAny(outputText, ['motiver', 'energiek', 'welkom', 'jij kan', 'samen', 'doel']);
+
+  if (rulesMentionTone && !outputMentionsTone) {
+    violations.push({
+      rule: 'Tone of voice mismatch',
+      description: 'Brand rules noemen tone-of-voice, maar de tekst bevat weinig tone-indicatoren.',
+      location: 'contentCopy',
+    });
+    suggestions.push('Maak de copy duidelijker volgens tone-of-voice (bijv. direct, motiverend, kort).');
   }
 
-  // Check 5: Call-to-action requirement
-  if (rulesText.includes('cta') || rulesText.includes('call-to-action') || rulesText.includes('call to action')) {
-    const hasCTA = /\b(click|visit|discover|learn more|get started|sign up|subscribe|join)\b/i.test(contentText);
-    
-    if (!hasCTA) {
-      score -= 10;
-      violations.push({
-        rule: 'Include call-to-action',
-        severity: 'high',
-        description: 'No clear call-to-action found',
-        location: 'contentCopy'
-      });
-    } else {
-      appliedRules.push('Includes clear call-to-action');
-    }
+  // BEELD/LAYOUT: als rules beeld/layout noemen maar prompt is vaag
+  const rulesMentionImage = includesAny(brandRules, mustImageTerms);
+  const promptTooShort = (content.imagePrompt || '').trim().length < 80;
+
+  if (rulesMentionImage && promptTooShort) {
+    violations.push({
+      rule: 'Image prompt te vaag',
+      description: 'Brand rules noemen beeld/layout, maar de image prompt is te kort om dit te sturen.',
+      location: 'imagePrompt',
+    });
+    suggestions.push('Maak de image prompt specifieker (setting, licht, compositie, kleuren, stijl).');
   }
 
-  // Check 6: Emoji usage
-  if (rulesText.includes('emoji')) {
-    const hasEmoji = /[\u{1F300}-\u{1F9FF}]/u.test(contentText);
-    
-    if (rulesText.includes('no emoji') && hasEmoji) {
-      score -= 5;
-      violations.push({
-        rule: 'No emoji allowed',
-        severity: 'low',
-        description: 'Content contains emojis',
-        location: 'contentCopy'
-      });
-    } else if (!rulesText.includes('no') && hasEmoji) {
-      appliedRules.push('Appropriate emoji usage');
-    }
-  }
+  // 4) Score: start bij 92, trek af per violation, bonus als veel applied rules
+  let score = 92;
+  score -= violations.length * 12;
+  score += Math.min(appliedRules.length, 6) * 2;
 
-  // Check 7: Active voice
-  if (rulesText.includes('active voice')) {
-    const passiveIndicators = ['was', 'were', 'been', 'being'];
-    const passiveCount = passiveIndicators.reduce((count, word) => {
-      const regex = new RegExp(`\\b${word}\\b`, 'gi');
-      return count + (contentText.match(regex) || []).length;
-    }, 0);
-    
-    if (passiveCount > 2) {
-      score -= 8;
-      violations.push({
-        rule: 'Use active voice',
-        severity: 'medium',
-        description: 'Multiple passive voice constructions detected',
-        location: 'contentCopy'
-      });
-    } else {
-      appliedRules.push('Primarily active voice');
-    }
-  }
-
-  // Ensure score doesn't go below 0
-  score = Math.max(0, score);
+  // clamp
+  score = Math.max(0, Math.min(100, score));
 
   return {
     score,
-    violations,
     appliedRules,
-    suggestions: generateSuggestions(violations)
+    violations,
+    suggestions,
   };
-}
-
-function generateSuggestions(violations: Violation[]): string[] {
-  const suggestions: string[] = [];
-  
-  violations.forEach(v => {
-    if (v.rule.includes('word')) {
-      suggestions.push('Consider shortening sentences and removing unnecessary words');
-    }
-    if (v.rule.includes('we')) {
-      suggestions.push("Replace 'I' with 'we' to emphasize collective brand voice");
-    }
-    if (v.rule.includes('jargon')) {
-      suggestions.push('Use simpler, more accessible language');
-    }
-    if (v.rule.includes('call-to-action')) {
-      suggestions.push('Add a clear next step (e.g., "Learn more", "Get started")');
-    }
-  });
-  
-  return [...new Set(suggestions)]; // Remove duplicates
 }

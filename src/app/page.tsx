@@ -1,425 +1,678 @@
 'use client';
-import { useState } from 'react';
-import { Briefing, GeneratedContent, ConsistencyResult, PreCheckResult } from '@/lib/types';
+
+import { useEffect, useState } from 'react';
+import type {
+  Briefing,
+  GeneratedContent,
+  ConsistencyResult,
+  PreCheckResult,
+  CanvasSpec,
+  LayoutSpec,
+} from '@/lib/types';
 
 export default function Home() {
   const [step, setStep] = useState<number>(1);
+  const [loading, setLoading] = useState<boolean>(false);
+
   const [brandRules, setBrandRules] = useState<string>('');
   const [pdfInfo, setPdfInfo] = useState<{ filename: string; pages: number } | null>(null);
+
+  const [pdfText, setPdfText] = useState<string>('');
+
+  const [rulesLoading, setRulesLoading] = useState<boolean>(false);
+  const [rulesError, setRulesError] = useState<string | null>(null);
+
   const [briefing, setBriefing] = useState<Briefing>({
     projectName: '',
     targetAudience: '',
     goal: '',
     channel: 'led-wall-retail',
-    additionalNotes: ''
+    additionalNotes: '',
   });
+
+  const getDefaultCanvasForChannel = (channel: Briefing['channel']): CanvasSpec => {
+    if (channel === 'digital-signage') return { width: 1080, height: 1920 };
+    return { width: 1600, height: 1200 };
+  };
+
+  const [canvas, setCanvas] = useState<CanvasSpec>(getDefaultCanvasForChannel('led-wall-retail'));
+  const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
+
   const [preCheckResult, setPreCheckResult] = useState<PreCheckResult | null>(null);
   const [generatedContent, setGeneratedContent] = useState<GeneratedContent | null>(null);
   const [consistencyResult, setConsistencyResult] = useState<ConsistencyResult | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
+
+  const [exampleImage, setExampleImage] = useState<{ dataUrl: string; filename: string } | null>(null);
+
+  const [generatedImage, setGeneratedImage] = useState<{
+    dataUrl: string;
+    mimeType: string;
+    timestamp?: string;
+    model?: string;
+    size?: string;
+  } | null>(null);
+
+  const [imageLoading, setImageLoading] = useState<boolean>(false);
+  const [imageError, setImageError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setCanvas(getDefaultCanvasForChannel(briefing.channel));
+    setShowAdvanced(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [briefing.channel]);
+
+  const layoutSpec: LayoutSpec = {
+    format: briefing.channel,
+    canvas,
+    safe_area: '10%',
+    layout:
+      briefing.channel === 'digital-signage'
+        ? ['headline_top', 'visual_center', 'cta_bottom']
+        : ['headline_top_left', 'visual_center', 'cta_bottom_left'],
+    typography: 'bold headline + short subline',
+    notes: 'Prototype supports two formats only. Image is background-only. Text is UI overlay.',
+  };
+
+  useEffect(() => {
+    if (step === 3) {
+      handleGenerate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
 
   const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setLoading(true);
+    setRulesError(null);
+
     try {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch('/api/upload-pdf', {
+      const res = await fetch('/api/upload-pdf', {
         method: 'POST',
         body: formData,
       });
 
-      const data = await response.json();
-      
-      if (response.ok || data.text) {
-        setBrandRules(data.text || '');
-        setPdfInfo({ filename: data.filename || file.name, pages: data.pages || 1 });
-        
-        if (data.note) {
-          alert(data.note);
-        }
+      const data = await res.json().catch(() => ({} as any));
+
+      if ((res.ok && data.text) || data.text) {
+        const text = data.text ?? '';
+        setBrandRules(text);
+        setPdfText(text);
+
+        setPdfInfo({
+          filename: data.filename ?? file.name,
+          pages: data.pages ?? 1,
+        });
+
+        if (data.note) alert(data.note);
       } else {
-        alert(data.message || data.error || 'PDF upload mislukt');
+        alert(data.error || 'PDF upload mislukt');
       }
-    } catch (error) {
+    } catch {
       alert('Kon PDF niet uploaden');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
+  };
+
+  const handleExtractRulesFromPdf = async () => {
+    if (!pdfText.trim()) {
+      alert('Upload eerst een PDF zodat er tekst beschikbaar is.');
+      return;
+    }
+
+    setRulesLoading(true);
+    setRulesError(null);
+
+    try {
+      const res = await fetch('/api/extract-rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pdfText }),
+      });
+
+      const data = await res.json().catch(() => ({} as any));
+
+      if (!res.ok) {
+        const details = data?.details ? ` — ${data.details}` : '';
+        setRulesError((data?.error || 'Rules extractie mislukt') + details);
+        return;
+      }
+
+      setBrandRules(data.rules || '');
+      alert('AI rules voorstel is ingevuld. Controleer en pas aan waar nodig.');
+    } catch {
+      setRulesError('Onbekende fout bij rules extractie');
+    } finally {
+      setRulesLoading(false);
+    }
   };
 
   const handlePreCheck = async () => {
     setLoading(true);
     try {
-      const response = await fetch('/api/pre-check', {
+      const res = await fetch('/api/pre-check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ briefing, brandRules }),
       });
 
-      const data = await response.json();
+      const data = await res.json().catch(() => ({} as any));
       setPreCheckResult(data);
-      
-      if (data.canProceed) {
-        setStep(3);
-      } else {
-        setStep(2);
-      }
-    } catch (error) {
+
+      if (data?.canProceed) setStep(3);
+      else setStep(2);
+    } catch {
       alert('Pre-check mislukt');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleGenerate = async () => {
     setLoading(true);
+
+    setGeneratedImage(null);
+    setImageError(null);
+
     try {
-      console.log('1. Starting generation...');
-      const response = await fetch('/api/generate', {
+      const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ briefing, brandRules }),
+        body: JSON.stringify({ briefing, brandRules, canvas, layoutSpec }),
       });
 
-      console.log('2. Got response:', response.status);
-      const data = await response.json();
-      console.log('3. Parsed data:', data);
-      
-      if (response.ok) {
-        console.log('4. Setting generated content...');
-        setGeneratedContent(data);
-        
-        console.log('5. Starting consistency check...');
-        const checkResponse = await fetch('/api/consistency-check', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: data, brandRules }),
-        });
+      const data = await res.json().catch(() => ({} as any));
 
-        console.log('6. Got consistency response:', checkResponse.status);
-        const checkData = await checkResponse.json();
-        console.log('7. Consistency data:', checkData);
-        
-        setConsistencyResult(checkData);
-        console.log('8. Setting step to 4...');
-        setStep(4);
-        console.log('9. Done!');
-      } else {
+      if (!res.ok) {
         alert(data.error || 'Generatie mislukt');
+        setStep(1);
+        return;
       }
-    } catch (error) {
-      console.error('CATCH ERROR:', error);
-      alert('Er ging iets fout: ' + error);
+
+      const mappedContent: GeneratedContent = {
+        briefingSpec: data.briefingSpec,
+        imagePrompt: data.imagePrompt,
+        contentCopy: data.contentCopy,
+        appliedRules: data.appliedRules ?? [],
+        warnings: data.warnings ?? [],
+        layoutSpec: data.layoutSpec ?? layoutSpec,
+      };
+
+      setGeneratedContent(mappedContent);
+
+      const checkRes = await fetch('/api/consistency-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: mappedContent,
+          brandRules,
+        }),
+      });
+
+      const checkData = await checkRes.json().catch(() => ({} as any));
+
+      const mappedResult: ConsistencyResult = {
+        score: checkData.score,
+        grade: checkData.grade,
+        violations: checkData.violations ?? [],
+        appliedRules: checkData.appliedRules ?? [],
+        suggestions: checkData.suggestions ?? [],
+      };
+
+      setConsistencyResult(mappedResult);
+      setStep(4);
+    } catch {
+      alert('Er ging iets fout tijdens genereren');
+      setStep(1);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
+  const buildImagePromptForModel = (basePrompt: string) => {
+    const placementHint =
+      briefing.channel === 'digital-signage'
+        ? `\n\nLeave a clean safe area at the top for a readable headline, and a clear area at the bottom for a CTA. Keep these areas uncluttered.`
+        : `\n\nLeave a clean safe area at the top-left for a readable headline, and a clear area at the bottom-left for a CTA. Keep these areas uncluttered.`;
+
+    const qualityHint = `\nClean composition, professional, high contrast, minimal noise.`;
+
+    return `${basePrompt.trim()}${placementHint}${qualityHint}`.trim();
+  };
+
+  const handleGenerateImage = async () => {
+    if (step !== 4) {
+      alert('Beeldgeneratie is pas beschikbaar in stap 4.');
+      return;
+    }
+    if (!generatedContent?.imagePrompt?.trim()) {
+      alert('Geen image prompt beschikbaar. Genereer eerst content.');
+      return;
+    }
+
+    setImageLoading(true);
+    setImageError(null);
+
+    try {
+      const upgradedPrompt = buildImagePromptForModel(generatedContent.imagePrompt);
+
+      const res = await fetch('/api/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: upgradedPrompt, canvas }),
+      });
+
+      const data = await res.json().catch(() => ({} as any));
+
+      if (!res.ok) {
+        const details = data?.details ? ` — ${data.details}` : '';
+        setImageError((data?.error || 'Beeldgeneratie mislukt') + details);
+        setGeneratedImage(null);
+        return;
+      }
+
+      const mimeType = data?.mimeType || 'image/png';
+      const b64 = data?.imageBase64;
+
+      if (!b64) {
+        setImageError('Beeldgeneratie gaf geen base64 terug');
+        setGeneratedImage(null);
+        return;
+      }
+
+      setGeneratedImage({
+        dataUrl: `data:${mimeType};base64,${b64}`,
+        mimeType,
+        timestamp: data?.timestamp,
+        model: data?.model,
+        size: data?.size,
+      });
+    } catch {
+      setImageError('Onbekende fout bij beeldgeneratie');
+      setGeneratedImage(null);
+    } finally {
+      setImageLoading(false);
+    }
+  };
+
+  const handleCopyPrompt = async () => {
+    if (!generatedContent?.imagePrompt) return;
+    try {
+      await navigator.clipboard.writeText(generatedContent.imagePrompt);
+      alert('Image prompt is gekopieerd.');
+    } catch {
+      alert('Kopiëren lukt niet. Selecteer de tekst en kopieer handmatig.');
+    }
+  };
+
+  const handleUploadExampleImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      if (!result) {
+        alert('Kon het bestand niet lezen');
+        return;
+      }
+      setExampleImage({ dataUrl: result, filename: file.name });
+    };
+    reader.onerror = () => alert('Kon het bestand niet lezen');
+    reader.readAsDataURL(file);
+  };
+
+  const resetAll = () => {
+    setStep(1);
+    setGeneratedContent(null);
+    setConsistencyResult(null);
+    setPreCheckResult(null);
+    setExampleImage(null);
+
+    setGeneratedImage(null);
+    setImageError(null);
+    setImageLoading(false);
+
+    setPdfText('');
+    setRulesError(null);
+    setRulesLoading(false);
+    setPdfInfo(null);
+    setBrandRules('');
+    setBriefing({
+      projectName: '',
+      targetAudience: '',
+      goal: '',
+      channel: 'led-wall-retail',
+      additionalNotes: '',
+    });
+
+    setCanvas(getDefaultCanvasForChannel('led-wall-retail'));
+    setShowAdvanced(false);
+  };
+
+  const canPreCheck =
+    !!brandRules.trim() &&
+    !!briefing.projectName?.trim() &&
+    !!briefing.targetAudience?.trim() &&
+    !!briefing.goal?.trim() &&
+    !!briefing.channel;
+
+  const aspectRatio = canvas.width / canvas.height;
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 p-4 md:p-8">
-      <div className="max-w-6xl mx-auto">
-        <div className="text-center mb-8">
-          <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-3">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 p-6">
+      <div className="max-w-6xl mx-auto space-y-8">
+        <header className="text-center">
+          <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
             Consistency Agent v2
           </h1>
-          <p className="text-gray-600 text-lg">
-            AI-powered consistency validation for visual concepts & event content
-          </p>
-        </div>
+          <p className="text-gray-600 mt-3">AI-ondersteunde consistentiecheck voor concept en visuele richting</p>
+        </header>
 
-        {/* Progress Steps */}
-        <div className="mb-8 flex justify-center">
-          <div className="flex items-center space-x-4">
-            {[
-              { num: 1, label: 'Input' },
-              { num: 2, label: 'Pre-Check' },
-              { num: 3, label: 'Generate' },
-              { num: 4, label: 'Results' }
-            ].map((s, i) => (
-              <div key={s.num} className="flex items-center">
-                <div className={`flex flex-col items-center ${step >= s.num ? 'opacity-100' : 'opacity-40'}`}>
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
-                    step >= s.num ? 'bg-blue-600 text-white' : 'bg-gray-300 text-gray-600'
-                  }`}>
-                    {s.num}
-                  </div>
-                  <span className="text-xs mt-1">{s.label}</span>
-                </div>
-                {i < 3 && <div className={`w-12 h-1 ${step > s.num ? 'bg-blue-600' : 'bg-gray-300'}`} />}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* STEP 1: Input */}
         {step === 1 && (
           <div className="space-y-6">
-            <div className="bg-white rounded-xl shadow-lg p-6">
-              <h2 className="text-2xl font-bold mb-4">Brand & Style Rules</h2>
-              
-              <div className="mb-4 p-6 border-2 border-dashed border-gray-300 rounded-lg hover:border-blue-400 transition">
-                <input
-                  type="file"
-                  accept=".pdf"
-                  onChange={handlePdfUpload}
-                  className="hidden"
-                  id="pdf-upload"
-                />
-                <label htmlFor="pdf-upload" className="cursor-pointer flex flex-col items-center">
-                  {loading ? (
-                    <div className="text-blue-600">Uploaden...</div>
-                  ) : pdfInfo ? (
-                    <div className="text-center">
-                      <div className="text-green-600 text-4xl mb-2">✓</div>
-                      <div className="font-medium">{pdfInfo.filename}</div>
-                      <div className="text-sm text-gray-600">{pdfInfo.pages} pagina's</div>
-                    </div>
-                  ) : (
-                    <div className="text-center">
-                      <div className="text-4xl mb-2">📄</div>
-                      <div className="font-medium">Upload Brandguide PDF</div>
-                      <div className="text-sm text-gray-600 mt-1">Of typ hieronder</div>
-                    </div>
-                  )}
-                </label>
+            <div className="bg-white p-6 rounded-xl shadow">
+              <h2 className="text-xl font-bold mb-3">Brand rules (selectie)</h2>
+              <div className="text-sm text-gray-600 mb-3">
+                Uploaden is ter referentie. Plak hieronder alleen de brand rules die relevant zijn voor dit project.
               </div>
 
+              <input type="file" accept=".pdf" onChange={handlePdfUpload} />
+
+              <button
+                onClick={handleExtractRulesFromPdf}
+                disabled={rulesLoading || loading || !pdfText.trim()}
+                className="mt-3 w-full bg-black text-white py-3 rounded-lg font-semibold disabled:bg-gray-400"
+              >
+                {rulesLoading ? 'Rules extraheren…' : 'Haal rules uit PDF (AI voorstel)'}
+              </button>
+
+              {rulesError && <p className="mt-2 text-sm text-red-600">{rulesError}</p>}
+
+              {pdfInfo && (
+                <p className="text-sm text-green-700 mt-2">
+                  {pdfInfo.filename} ({pdfInfo.pages} pagina&apos;s)
+                </p>
+              )}
+
               <textarea
-                className="w-full border-2 border-gray-200 rounded-lg p-4 h-32 focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
-                placeholder="Typ je brand/visual guidelines (visuele stijl, do's & don'ts, constraints...)"
+                className="w-full mt-4 border p-3 rounded-lg h-32"
+                placeholder="Plak of typ de geselecteerde brand/visual guidelines"
                 value={brandRules}
                 onChange={(e) => setBrandRules(e.target.value)}
               />
             </div>
 
-            <div className="bg-white rounded-xl shadow-lg p-6">
-              <h2 className="text-2xl font-bold mb-4">Project Briefing</h2>
-              
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-2">Project Naam *</label>
-                  <input
-                    type="text"
-                    className="w-full border-2 border-gray-200 rounded-lg p-3 focus:border-blue-500"
-                    placeholder="bijv. Summer Event 2025"
-                    value={briefing.projectName}
-                    onChange={(e) => setBriefing({...briefing, projectName: e.target.value})}
-                  />
-                </div>
+            <div className="bg-white p-6 rounded-xl shadow space-y-4">
+              <h2 className="text-xl font-bold">Briefing</h2>
 
-                <div>
-                  <label className="block text-sm font-medium mb-2">Doelgroep *</label>
-                  <input
-                    type="text"
-                    className="w-full border-2 border-gray-200 rounded-lg p-3 focus:border-blue-500"
-                    placeholder="bijv. Bezoekers, VIP's, stakeholders, medewerkers"
-                    value={briefing.targetAudience}
-                    onChange={(e) => setBriefing({...briefing, targetAudience: e.target.value})}
-                  />
-                </div>
+              <input
+                className="w-full border p-3 rounded"
+                placeholder="Projectnaam"
+                value={briefing.projectName}
+                onChange={(e) => setBriefing({ ...briefing, projectName: e.target.value })}
+              />
 
-                <div>
-                  <label className="block text-sm font-medium mb-2">Doel / Boodschap *</label>
-                  <textarea
-                    className="w-full border-2 border-gray-200 rounded-lg p-3 h-24 focus:border-blue-500"
-                    placeholder="bijv. Verwelkomen bezoekers, merkbekendheid vergroten, informatie communiceren"
-                    value={briefing.goal}
-                    onChange={(e) => setBriefing({...briefing, goal: e.target.value})}
-                  />
-                  <p className="text-xs text-gray-500 mt-2">
-                    Wat moet deze visual communiceren of bereiken?
-                  </p>
-                </div>
+              <input
+                className="w-full border p-3 rounded"
+                placeholder="Doelgroep"
+                value={briefing.targetAudience}
+                onChange={(e) => setBriefing({ ...briefing, targetAudience: e.target.value })}
+              />
 
-                <div>
-                  <label className="block text-sm font-medium mb-2">Toepassing / Medium *</label>
-                  <select
-                    className="w-full border-2 border-gray-200 rounded-lg p-3 focus:border-blue-500"
-                    value={briefing.channel}
-                    onChange={(e) => setBriefing({...briefing, channel: e.target.value as Briefing['channel']})}
-                  >
-                    <option value="led-wall-retail">LED wall (retail / experience)</option>
-                    <option value="digital-signage">Digital signage</option>
-                    <option value="online-campaign">Online campagne (conceptfase)</option>
-                  </select>
-                  <p className="text-xs text-gray-500 mt-2">
-                    De gekozen toepassing bepaalt het formaat en de context van de gegenereerde conceptuele visuals.
-                  </p>
-                </div>
+              <textarea
+                className="w-full border p-3 rounded"
+                placeholder="Doel / boodschap"
+                value={briefing.goal}
+                onChange={(e) => setBriefing({ ...briefing, goal: e.target.value })}
+              />
 
-                <div>
-                  <label className="block text-sm font-medium mb-2">Extra Notities</label>
-                  <textarea
-                    className="w-full border-2 border-gray-200 rounded-lg p-3 h-24 focus:border-blue-500"
-                    placeholder="Overige opmerkingen, technische constraints, deadlines..."
-                    value={briefing.additionalNotes}
-                    onChange={(e) => setBriefing({...briefing, additionalNotes: e.target.value})}
-                  />
-                </div>
+              <select
+                className="w-full border p-3 rounded"
+                value={briefing.channel}
+                onChange={(e) => setBriefing({ ...briefing, channel: e.target.value as Briefing['channel'] })}
+              >
+                <option value="led-wall-retail">LED wall</option>
+                <option value="digital-signage">Digital signage</option>
+              </select>
+
+              <div className="text-sm text-gray-600">
+                Formaat (vast in prototype): <span className="font-semibold">{canvas.width}×{canvas.height}px</span>
               </div>
 
+              <textarea
+                className="w-full border p-3 rounded"
+                placeholder="Extra notities"
+                value={briefing.additionalNotes}
+                onChange={(e) => setBriefing({ ...briefing, additionalNotes: e.target.value })}
+              />
+
               <button
+                disabled={!canPreCheck || loading}
                 onClick={handlePreCheck}
-                disabled={loading || !brandRules || !briefing.projectName}
-                className="mt-6 w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-8 py-4 rounded-lg font-semibold hover:from-blue-700 hover:to-indigo-700 disabled:from-gray-400 disabled:to-gray-400"
+                className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold disabled:bg-gray-400"
               >
-                {loading ? 'Checking...' : 'Volgende: Pre-Check →'}
+                Volgende: pre-check
               </button>
             </div>
           </div>
         )}
 
-        {/* STEP 2: Pre-Check Results */}
         {step === 2 && preCheckResult && (
-          <div className="bg-white rounded-xl shadow-lg p-6">
-            <h2 className="text-2xl font-bold mb-4">Pre-Check Resultaten</h2>
-            
-            {preCheckResult.missing.length > 0 && (
-              <div className="mb-4 p-4 bg-red-50 border-l-4 border-red-500 rounded">
-                <h3 className="font-bold text-red-800 mb-2">❌ Ontbrekende Informatie</h3>
-                <ul className="list-disc pl-5 text-red-700">
-                  {preCheckResult.missing.map((m, i) => (
-                    <li key={i}>{m.field}: {m.reason}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+          <div className="bg-white p-6 rounded-xl shadow space-y-4">
+            <h2 className="text-xl font-bold">Pre-check resultaten</h2>
 
-            {preCheckResult.conflicts.length > 0 && (
-              <div className="mb-4 p-4 bg-orange-50 border-l-4 border-orange-500 rounded">
-                <h3 className="font-bold text-orange-800 mb-2">⚠️ Conflicten</h3>
-                <ul className="list-disc pl-5 text-orange-700">
-                  {preCheckResult.conflicts.map((c, i) => (
-                    <li key={i}>{c.area}: {c.issue}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            {(preCheckResult as any)?.missing?.map((m: any, i: number) => (
+              <p key={i} className="text-red-700">
+                Ontbreekt: {m.field} — {m.reason}
+              </p>
+            ))}
 
-            {preCheckResult.warnings.length > 0 && (
-              <div className="mb-4 p-4 bg-yellow-50 border-l-4 border-yellow-500 rounded">
-                <h3 className="font-bold text-yellow-800 mb-2">💡 Waarschuwingen</h3>
-                <ul className="list-disc pl-5 text-yellow-700">
-                  {preCheckResult.warnings.map((w, i) => (
-                    <li key={i}>{w.area}: {w.message}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            {(preCheckResult as any)?.conflicts?.map((c: any, i: number) => (
+              <p key={i} className="text-orange-700">
+                Conflict: {c.area} — {c.issue}
+              </p>
+            ))}
+
+            {(preCheckResult as any)?.warnings?.map((w: any, i: number) => (
+              <p key={i} className="text-yellow-700">
+                Waarschuwing: {w.area} — {w.message}
+              </p>
+            ))}
 
             <div className="flex gap-4">
-              <button
-                onClick={() => setStep(1)}
-                className="flex-1 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg font-semibold hover:bg-gray-300"
-              >
-                ← Terug
+              <button onClick={() => setStep(1)} className="flex-1 border py-3 rounded">
+                Terug
               </button>
               <button
-                onClick={handleGenerate}
-                disabled={loading || !preCheckResult.canProceed}
-                className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-indigo-700 disabled:from-gray-400 disabled:to-gray-400"
+                disabled={!(preCheckResult as any)?.canProceed}
+                onClick={() => setStep(3)}
+                className="flex-1 bg-blue-600 text-white py-3 rounded disabled:bg-gray-400"
               >
-                {loading ? 'Genereren...' : 'Doorgaan naar Generatie →'}
+                Start generatie
               </button>
             </div>
           </div>
         )}
 
-        {/* STEP 3: Generating */}
         {step === 3 && (
-          <div className="bg-white rounded-xl shadow-lg p-12 text-center">
-            <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-blue-600 mx-auto mb-4"></div>
-            <h2 className="text-2xl font-bold mb-2">Content aan het genereren...</h2>
-            <p className="text-gray-600">Dit kan 10-20 seconden duren</p>
+          <div className="bg-white p-12 rounded-xl shadow text-center">
+            <div className="h-12 w-12 border-b-4 border-blue-600 rounded-full mx-auto mb-4 animate-spin" />
+            <p>Content wordt gegenereerd…</p>
           </div>
         )}
 
-        {/* STEP 4: Results */}
         {step === 4 && generatedContent && consistencyResult && (
           <div className="space-y-6">
-            <div className="bg-white rounded-xl shadow-lg p-6">
-              <h2 className="text-2xl font-bold mb-4">Consistency Score</h2>
-              <div className="flex items-center gap-6">
-                <div className={`text-6xl font-bold ${
-                  consistencyResult.score >= 90 ? 'text-green-600' :
-                  consistencyResult.score >= 70 ? 'text-blue-600' :
-                  consistencyResult.score >= 50 ? 'text-yellow-600' : 'text-red-600'
-                }`}>
-                  {consistencyResult.score}
-                </div>
-                <div>
-                  <div className={`text-3xl font-bold ${
-                    consistencyResult.grade.color === 'green' ? 'text-green-600' :
-                    consistencyResult.grade.color === 'blue' ? 'text-blue-600' :
-                    consistencyResult.grade.color === 'yellow' ? 'text-yellow-600' : 'text-red-600'
-                  }`}>
-                    Grade: {consistencyResult.grade.letter}
-                  </div>
-                  <div className="text-gray-600">
-                    {consistencyResult.violations.length} violations found
-                  </div>
-                </div>
-              </div>
+            <div className="bg-white p-6 rounded-xl shadow">
+              <h2 className="text-xl font-bold mb-2">Consistency score</h2>
+              <p className="text-4xl font-bold">{(consistencyResult as any)?.score}</p>
+              <p className="text-gray-600">Grade: {(consistencyResult as any)?.grade?.letter}</p>
+              <p className="text-sm text-gray-600 mt-2">
+                Canvas: <span className="font-semibold">{canvas.width}×{canvas.height}</span> — aspect{' '}
+                <span className="font-semibold">{(canvas.width / canvas.height).toFixed(2)}</span>
+              </p>
             </div>
 
-            <div className="bg-white rounded-xl shadow-lg p-6">
-              <h2 className="text-2xl font-bold mb-4">Generated Content</h2>
-              <div className="bg-gray-50 p-6 rounded-lg mb-4">
-                <p className="whitespace-pre-wrap">
-                  {typeof generatedContent.contentCopy === 'string' 
-                    ? generatedContent.contentCopy 
-                    : JSON.stringify(generatedContent.contentCopy, null, 2)}
-                </p>
-              </div>
-              
-              <h3 className="font-bold mb-2">Visual Concept Description</h3>
-              <div className="bg-blue-50 p-4 rounded-lg">
-                <p className="text-sm">
-                  {typeof generatedContent.imagePrompt === 'string'
-                    ? generatedContent.imagePrompt
-                    : JSON.stringify(generatedContent.imagePrompt, null, 2)}
-                </p>
-              </div>
-            </div>
+            <div className="bg-white p-6 rounded-xl shadow">
+              <h2 className="text-xl font-bold mb-2">Gegenereerde content</h2>
+              <pre className="whitespace-pre-wrap">{generatedContent.contentCopy}</pre>
 
-            {consistencyResult.violations.length > 0 && (
-              <div className="bg-white rounded-xl shadow-lg p-6">
-                <h2 className="text-2xl font-bold mb-4 text-red-600">Violations</h2>
-                <div className="space-y-3">
-                  {consistencyResult.violations.map((v, i) => (
-                    <div key={i} className="p-4 bg-red-50 border-l-4 border-red-500 rounded">
-                      <div className="font-bold">{v.rule}</div>
-                      <div className="text-sm text-gray-700">{v.description}</div>
-                      <div className="text-xs text-gray-500 mt-1">Location: {v.location}</div>
+              <h3 className="font-bold mt-4 mb-2">Visuele richting (image prompt)</h3>
+              <div className="border rounded-lg p-3 bg-gray-50">
+                <p className="text-sm text-gray-800">{generatedContent.imagePrompt}</p>
+              </div>
+
+              <button
+                onClick={handleCopyPrompt}
+                disabled={loading}
+                className="mt-4 w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold disabled:bg-gray-400"
+              >
+                Kopieer image prompt
+              </button>
+
+              <div className="mt-3">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced((v) => !v)}
+                  className="w-full border py-3 rounded-lg font-semibold bg-white"
+                >
+                  {showAdvanced ? 'Verberg Advanced view' : 'Toon Advanced view: Layout / Template spec (JSON)'}
+                </button>
+
+                {showAdvanced && (
+                  <div className="mt-3 border rounded-lg p-4 bg-gray-50 space-y-2">
+                    <div className="text-sm text-gray-700">
+                      Deze JSON maakt expliciet welke layout-aannames en safe-areas gelden voor dit format.
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
-            <div className="bg-white rounded-xl shadow-lg p-6">
-              <h2 className="text-2xl font-bold mb-4 text-green-600">Applied Rules ✓</h2>
-              <div className="space-y-2">
-                {Array.isArray(consistencyResult.appliedRules) && consistencyResult.appliedRules.map((rule, i) => (
-                  <div key={i} className="flex items-start bg-green-50 p-3 rounded-lg">
-                    <span className="text-green-600 mr-3">✓</span>
-                    <span>{typeof rule === 'string' ? rule : JSON.stringify(rule)}</span>
+                    <textarea
+                      readOnly
+                      className="w-full border p-3 rounded-lg h-40 font-mono text-xs bg-white"
+                      value={JSON.stringify(generatedContent.layoutSpec ?? layoutSpec, null, 2)}
+                    />
+
+                    <button
+                      type="button"
+                      className="w-full bg-black text-white py-3 rounded-lg font-semibold"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(
+                            JSON.stringify(generatedContent.layoutSpec ?? layoutSpec, null, 2)
+                          );
+                          alert('Layout spec gekopieerd.');
+                        } catch {
+                          alert('Kopiëren lukt niet. Selecteer handmatig.');
+                        }
+                      }}
+                    >
+                      Kopieer layout spec
+                    </button>
                   </div>
-                ))}
+                )}
+              </div>
+
+              {generatedContent.imagePrompt?.trim() && (
+                <button
+                  onClick={handleGenerateImage}
+                  disabled={imageLoading || loading}
+                  className="mt-3 w-full bg-black text-white py-3 rounded-lg font-semibold disabled:bg-gray-400"
+                >
+                  {imageLoading ? 'Image genereren…' : 'Genereer image (OpenAI)'}
+                </button>
+              )}
+
+              {imageError && <p className="mt-2 text-sm text-red-600">{imageError}</p>}
+
+              {generatedImage && (
+                <div className="mt-4">
+                  <div className="text-xs text-gray-500">
+                    {generatedImage.model ? `Model: ${generatedImage.model} — ` : ''}
+                    {generatedImage.size ? `Size: ${generatedImage.size} — ` : ''}
+                    {generatedImage.timestamp ? `Tijd: ${generatedImage.timestamp}` : ''}
+                  </div>
+
+                  <div
+                    className="mt-2 mx-auto max-w-xl rounded-lg shadow overflow-hidden bg-black/5"
+                    style={{ aspectRatio: `${canvas.width} / ${canvas.height}` }}
+                  >
+                    <img src={generatedImage.dataUrl} alt="AI gegenereerde afbeelding" className="w-full h-full object-cover" />
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-6 border-t pt-6">
+                <h3 className="font-bold mb-2">.)</h3>
+                <p className="text-sm text-gray-600 mb-3">
+                  .
+                </p>
+
+                <input type="file" accept="image/*" onChange={handleUploadExampleImage} />
+
+                {exampleImage && (
+                  <div className="mt-4">
+                    <p className="text-sm text-gray-600">{exampleImage.filename}</p>
+                    <div
+                      className="mt-2 mx-auto max-w-xl rounded-lg shadow overflow-hidden bg-black/5"
+                      style={{ aspectRatio: `${canvas.width} / ${canvas.height}` }}
+                    >
+                      <img src={exampleImage.dataUrl} alt="Voorbeeldafbeelding" className="w-full h-full object-cover" />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-6 border-t pt-6">
+                <h3 className="font-bold mb-2">Overtredingen</h3>
+                {(consistencyResult as any)?.violations?.length === 0 ? (
+                  <p className="text-sm text-gray-600">Geen overtredingen gevonden.</p>
+                ) : (
+                  <ul className="space-y-2">
+                    {(consistencyResult as any)?.violations?.map((v: any, i: number) => (
+                      <li key={i} className="border rounded-lg p-3">
+                        <div className="font-semibold">{v.rule}</div>
+                        <div className="text-sm text-gray-700">{v.description}</div>
+                        <div className="text-xs text-gray-500 mt-1">Locatie: {v.location}</div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="mt-6 border-t pt-6">
+                <h3 className="font-bold mb-2">Toegepaste regels</h3>
+                {(consistencyResult as any)?.appliedRules?.length === 0 ? (
+                  <p className="text-sm text-gray-600">Geen toegepaste regels gevonden.</p>
+                ) : (
+                  <ul className="list-disc pl-5 space-y-1 text-sm text-gray-700">
+                    {(consistencyResult as any)?.appliedRules?.map((r: any, i: number) => (
+                      <li key={i}>{r}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="mt-6 border-t pt-6">
+                <h3 className="font-bold mb-2">Suggesties</h3>
+                {(consistencyResult as any)?.suggestions?.length === 0 ? (
+                  <p className="text-sm text-gray-600">Geen suggesties.</p>
+                ) : (
+                  <ul className="list-disc pl-5 space-y-1 text-sm text-gray-700">
+                    {(consistencyResult as any)?.suggestions?.map((s: any, i: number) => (
+                      <li key={i}>{s}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </div>
 
-            <button
-              onClick={() => {
-                setStep(1);
-                setGeneratedContent(null);
-                setConsistencyResult(null);
-                setPreCheckResult(null);
-              }}
-              className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-8 py-4 rounded-lg font-semibold hover:from-blue-700 hover:to-indigo-700"
-            >
-              🔄 Nieuwe Generatie
+            <button onClick={resetAll} className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold">
+              Nieuwe run / opnieuw beginnen
             </button>
           </div>
         )}
